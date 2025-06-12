@@ -36,8 +36,16 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         """
         return traj / self.kmax * torch.pi
 
+    @property
+    def scaling_coef(self) -> torch.Tensor:
+        """
+        Returns the scaling coefficient for NUFFT.
+        This is used to scale the k-space data after NUFFT.
+        """
+        return self._inufft_obj.scaling_coef
+
     def pre_calculate(self):
-        dummy_image = torch.ones(*self.image_size, dtype=self.get_complex_type(self.dtype),device = self.traj.device)
+        dummy_image = torch.ones(*self.image_size, dtype=self.get_complex_dtype(self.dtype),device = self.traj.device)
         dummy_image = dummy_image.unsqueeze(0).unsqueeze(0)
         traj = self.traj_normalize(self.traj) # normalize traj to (-pi, pi)
         traj = rearrange(traj, 'phase readout pos -> pos (phase readout)')
@@ -46,7 +54,7 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         # kbnufft routine
         kdata = self._nufft_obj(dummy_image, traj)
         kspace_center = kdata[...,0]
-        self.scale_nuifft = dummy_image.sum() / kspace_center # update buffer
+        self.scale_nufft = dummy_image.sum() / kspace_center # update buffer
         kdata = kdata * self.scale_nufft
         kspace_center = kdata[...,0]
         interp_mats = calc_tensor_spmatrix(traj,im_size=self.image_size, table_oversamp=2)
@@ -55,7 +63,7 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         image = self._inufft_obj(kdata, traj, interp_mats)
         self.scale_nuifft = kspace_center / image.sum() # update buffer
 
-    def grid(self, input: torch.Tensor, traj: torch.Tensor) -> torch.Tensor:
+    def grid(self, input: torch.Tensor, traj: torch.Tensor, shift: bool = True, phase_shift:bool = True) -> torch.Tensor:
         """
         input: [batch, channel, phase, readout]
         traj: [phase, readout, pos]
@@ -63,6 +71,7 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         Returns:
         kdata: [batch, channel, hight, wigth]
         """
+        traj = traj.to(self.get_float_dtype(input.dtype))
         input_shape = input.shape
         p, r, _ = traj.shape
         traj = self.traj_normalize(traj)
@@ -75,7 +84,14 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         input = self._grid_obj(input, traj, interp_mats)
 
         input = input.view(*input_shape[:-3], *input.shape[-3:])
-        input = fftshift(input, dim=(-2, -1))
+        if shift:
+            input = fftshift(input, dim=(-2, -1))
+        if phase_shift:
+            nx, ny = input.shape[-2:]
+            x = torch.arange(nx, device=input.device).view(-1, 1) - nx // 2
+            y = torch.arange(ny, device=input.device).view(1, -1) - ny // 2
+            phase_correction = torch.exp(-1j * 2 * torch.pi * (0.5 * x/ nx + 0.5 * y/ ny))
+            input = input * phase_correction
         return input
 
     def dcomp(self, traj: torch.Tensor) -> torch.Tensor:
@@ -92,6 +108,7 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         image: [..., batch, channel, h, w]
         traj: [phase, readout, pos]
         """
+        traj = traj.to(self.get_float_dtype(image.dtype))
         image_shape = image.shape
         p, r, _ = traj.shape
         traj = self.traj_normalize(traj)
@@ -109,6 +126,7 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
         kdata: [..., batch, channel, phase, readout]
         traj: [phase, readout, pos]
         """
+        traj = traj.to(self.get_float_dtype(kdata.dtype))
         kdata_shape = kdata.shape
         p, r, _ = traj.shape
         traj = self.traj_normalize(traj)
@@ -126,11 +144,11 @@ class TORCHKBNUFFTSampling2d(NufftInterface):
     
     def A(self, image: torch.Tensor) -> torch.Tensor:
         # image = image * self.csm
-        kdata = self.nufft(image, self.traj)
+        kdata = self.nufft(image, self.traj.to(self.get_float_dtype(image.dtype)))
         return kdata
     
     def At(self, kdata: torch.Tensor) -> torch.Tensor:
-        image = self.nuifft(kdata, self.traj)
+        image = self.nuifft(kdata, self.traj.to(self.get_float_dtype(kdata.dtype)))
         # image = self.mulchan2single(image, self.csm)
         return image
     
