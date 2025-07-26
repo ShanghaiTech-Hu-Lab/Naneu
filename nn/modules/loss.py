@@ -63,12 +63,24 @@ class SSIMLoss(nn.Module):
             target: torch.Tensor,
             batch_data_range: torch.Tensor = None,
         ):
-        if batch_data_range is not None:
-            if input.size(0)  != batch_data_range.size(0):
-                raise ValueError("`input` and `batch_data_range` must have the same batchsize.")
-            data_range = batch_data_range.view(input.size(0),*([1] * (input.ndim - 1)))
+        if batch_data_range is None:
+            data_range = self.data_range
         else:
-            data_range = self.data_range.view(*([1] * (input.ndim))).expand(input.size(0),*([1] * (input.ndim - 1)))
+            data_range = batch_data_range
+
+        if data_range.ndim > 0 and input.ndim >= 3:
+            if input.size(0) != data_range.size(0):
+                raise ValueError(f"`input` and `batch_data_range` must have the same batchsize. Got shape `input` {input.shape}, `data_range` {data_range.shape}")
+            data_range = data_range.view(input.size(0),*([1] * (input.ndim - 1)))
+
+        if input.ndim < 4:
+            input = input.view(
+                *(1,) * (4 - input.ndim), *input.shape,
+            )
+        if target.ndim < 4:
+            target = target.view(
+                *(1,) * (4 - target.ndim), *target.shape,
+            )
 
         C1 = (self.k1 * data_range) ** 2
         C2 = (self.k2 * data_range) ** 2

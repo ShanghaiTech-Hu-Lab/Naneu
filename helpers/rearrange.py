@@ -240,7 +240,7 @@ class TorchModuleForwardInputCallbacksManager:
             for callback_argnames, callback in self.callbacks:
                 if argname in callback_argnames:
                     value = callback(value)
-                    bound_arguments.arguments[argname] = value
+            bound_arguments.arguments[argname] = value
 
         return bound_arguments.args, bound_arguments.kwargs
 
@@ -277,62 +277,76 @@ class TorchModuleForwardOutputCallbacksManager:
         if output is None:
             return output
         
-        if not isinstance(output, (list, tuple)):
+        if isinstance(output, tuple):
+            output = list(output)
+        else:
             output = [output]
-        
+
         for i, out in enumerate(output):
-            for output_indices, callback in self.callbacks:
+            for output_indices, callback in reversed(self.callbacks):
                 if output_indices == "all" or i in output_indices:
-                    output[i] = callback(out)
-        
+                    out = callback(out)
+            output[i] = out
+
         if len(output) == 1:
             output = output[0]
-        elif isinstance(output, tuple):
+        else:
             output = tuple(output)
+
         return output
 
-class TorchModuleForwardHook:
+class TorchModuleForwardHook(torch.nn.Module):
     def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        if not isinstance(module, torch.nn.Module):
+            raise ValueError("Expected `module` to be an instance of `torch.nn.Module`.")
         if not hasattr(module, "forward"):
             raise ValueError("Module must have a `forward` method.")
+        if isinstance(module, TorchModuleForwardHook):
+            raise ValueError("Module is already wrapped with `TorchModuleForwardHook`.")
         
-        if hasattr(module, "torch_module_forward_hook"):
-            if not isinstance(module.torch_module_forward_hook, TorchModuleForwardHook):
-                raise ValueError("Module's `torch_module_forward_hook` must be an instance of `TorchModuleForwardHook`.")
-        else:
-            self.original_forward = module.forward
-            self.input_callbacks = TorchModuleForwardInputCallbacksManager(self.original_forward)
-            self.output_callbacks = TorchModuleForwardOutputCallbacksManager(self.original_forward)
-            setattr(module, "torch_module_forward_hook", self)
-            setattr(module, "forward", self.forward)
+        self.module = module
+        self.input_callbacks = TorchModuleForwardInputCallbacksManager(self.module.forward)
+        self.output_callbacks = TorchModuleForwardOutputCallbacksManager(self.module.forward)
 
-    
+    def __getattr__(self, name):
+        if name == "module":
+            return super().__getattr__(name)
+        try:
+            return getattr(self.module, name)
+        except AttributeError:
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def forward(self, *args, **kwargs):
         args, kwargs = self.input_callbacks(*args, **kwargs)
-        output = self.original_forward(*args, **kwargs)
+        output = self.module.forward(*args, **kwargs)
         output = self.output_callbacks(output)
         return output
+            
 
 class TorchModuleForwardCallback:
     def __init__(
         self,
-        module: torch.nn.Module,
+        hook: TorchModuleForwardHook,
         for_input: List[str| int] | Literal["all"] | Literal["firstonly"] = None,
         for_output: List[int] | Literal["all"] = None,
         ):
         if for_input is None and for_output is None:
             raise ValueError("At least one of `for_input` or `for_output` must be provided.")
 
-        hook = TorchModuleForwardHook(module)
         hook.input_callbacks.register(for_input, self.input_callback)
         hook.output_callbacks.register(for_output, self.output_callback)
 
     @classmethod
     def bind(cls, method_name: str):
+        if hasattr(torch.nn.Module, method_name):
+            return
+        
         def register(self, *args, **kwargs):
+            if not isinstance(self, TorchModuleForwardHook):
+                self = TorchModuleForwardHook(self)
             cls(self, *args, **kwargs)
             return self
-
         setattr(torch.nn.Module, method_name, register)
 
     @abstractmethod
@@ -353,9 +367,15 @@ class TorchModuleForwardCallback:
 
 class ViewAsReal(TorchModuleForwardCallback):
     def input_callback(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
         return torch.view_as_real(tensor)
     
     def output_callback(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
+        if not tensor.is_contiguous():
+            tensor = tensor.contiguous()
         return torch.view_as_complex(tensor)
     
     def __init__(self, module: torch.nn.Module, for_input: List[str| int] | Literal["all"] | Literal["firstonly"] = "all", for_output: List[int] | Literal["all"] = "all"):
@@ -363,6 +383,8 @@ class ViewAsReal(TorchModuleForwardCallback):
 
 class ViewAsReal2Chan(TorchModuleForwardCallback):
     def input_callback(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
         original_shape = list(tensor.shape)
         real_imag = torch.view_as_real(tensor)
 
@@ -377,6 +399,11 @@ class ViewAsReal2Chan(TorchModuleForwardCallback):
         return real_imag.reshape(new_shape)
 
     def output_callback(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
+        if not tensor.is_contiguous():
+            tensor = tensor.contiguous()
+
         original_shape = list(tensor.shape)
         ndim = len(original_shape)
         
@@ -404,6 +431,8 @@ class Rearrange(TorchModuleForwardCallback):
         return re.findall(r'\(.*?\)|\S+', pattern)
     
     def input_callback(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
         pattern = self.pattern_outer + "->" + self.pattern_inner
         axes_lengths = self.axes_lengths_outer.copy()
 
@@ -425,6 +454,8 @@ class Rearrange(TorchModuleForwardCallback):
         return rearrange(tensor, pattern, **axes_lengths)
 
     def output_callback(self, tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(tensor, torch.Tensor):
+            return tensor
         pattern = self.pattern_inner + "->" + self.pattern_outer
         if self.axes_lengths_inner is None:
             axes_lengths = self.axes_lengths_outer.copy()
