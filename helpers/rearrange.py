@@ -369,14 +369,12 @@ class ViewAsReal(TorchModuleForwardCallback):
     def input_callback(self, tensor: torch.Tensor) -> torch.Tensor:
         if not isinstance(tensor, torch.Tensor):
             return tensor
-        return torch.view_as_real(tensor)
+        return torch.view_as_real(tensor).contiguous()
     
     def output_callback(self, tensor: torch.Tensor) -> torch.Tensor:
         if not isinstance(tensor, torch.Tensor):
             return tensor
-        if not tensor.is_contiguous():
-            tensor = tensor.contiguous()
-        return torch.view_as_complex(tensor)
+        return torch.view_as_complex(tensor.contiguous())
     
     def __init__(self, module: torch.nn.Module, for_input: List[str| int] | Literal["all"] | Literal["firstonly"] = "all", for_output: List[int] | Literal["all"] = "all"):
         super().__init__(module, for_input=for_input, for_output=for_output)
@@ -396,13 +394,12 @@ class ViewAsReal2Chan(TorchModuleForwardCallback):
         permute_order.insert(n + 1, permute_order.pop(-1))
         real_imag = real_imag.permute(permute_order)
         new_shape = real_imag.shape[:n] + (-1,) + real_imag.shape[n+2:]
-        return real_imag.reshape(new_shape)
+        return real_imag.reshape(new_shape).contiguous()
 
     def output_callback(self, tensor: torch.Tensor) -> torch.Tensor:
         if not isinstance(tensor, torch.Tensor):
             return tensor
-        if not tensor.is_contiguous():
-            tensor = tensor.contiguous()
+        tensor = tensor.contiguous()
 
         original_shape = list(tensor.shape)
         ndim = len(original_shape)
@@ -451,7 +448,7 @@ class Rearrange(TorchModuleForwardCallback):
         else:
             self.axes_lengths_inner = None
 
-        return rearrange(tensor, pattern, **axes_lengths)
+        return rearrange(tensor, pattern, **axes_lengths).contiguous()
 
     def output_callback(self, tensor: torch.Tensor) -> torch.Tensor:
         if not isinstance(tensor, torch.Tensor):

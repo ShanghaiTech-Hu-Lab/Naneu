@@ -73,6 +73,12 @@ class SSIMLoss(nn.Module):
                 raise ValueError(f"`input` and `batch_data_range` must have the same batchsize. Got shape `input` {input.shape}, `data_range` {data_range.shape}")
             data_range = data_range.view(input.size(0),*([1] * (input.ndim - 1)))
 
+        device = input.device
+        run_device = self.data_range.device
+        input = input.to(run_device)
+        target = target.to(run_device)
+        data_range = data_range.to(run_device)
+
         if input.ndim < 4:
             input = input.view(
                 *(1,) * (4 - input.ndim), *input.shape,
@@ -81,7 +87,6 @@ class SSIMLoss(nn.Module):
             target = target.view(
                 *(1,) * (4 - target.ndim), *target.shape,
             )
-
         C1 = (self.k1 * data_range) ** 2
         C2 = (self.k2 * data_range) ** 2
 
@@ -103,8 +108,10 @@ class SSIMLoss(nn.Module):
         ssim_map = (A1 * A2) / (B1 * B2)
         
         if self.reduction == "mean":
-            return 1 - ssim_map.mean()
+            score =  1 - ssim_map.mean()
         elif self.reduction == "sum":
-            return ssim_map.size(0) - ssim_map.mean(tuple(range(1, ssim_map.ndim))).sum()
+            score =  ssim_map.size(0) - ssim_map.mean(tuple(range(1, ssim_map.ndim))).sum()
         else:
-            return 1 - ssim_map
+            score =  1 - ssim_map
+        
+        return score.to(device)
