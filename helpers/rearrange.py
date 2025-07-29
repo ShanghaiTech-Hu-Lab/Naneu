@@ -333,9 +333,9 @@ class TorchModuleForwardCallback:
         ):
         if for_input is None and for_output is None:
             raise ValueError("At least one of `for_input` or `for_output` must be provided.")
-
-        hook.input_callbacks.register(for_input, self.input_callback)
-        hook.output_callbacks.register(for_output, self.output_callback)
+        self.hook = hook
+        self.hook.input_callbacks.register(for_input, self.input_callback)
+        self.hook.output_callbacks.register(for_output, self.output_callback)
 
     @classmethod
     def bind(cls, method_name: str):
