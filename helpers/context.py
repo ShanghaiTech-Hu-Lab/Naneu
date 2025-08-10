@@ -29,6 +29,7 @@ class ExtraContext:
         self.__registed_modules_prefix = OrderedDict()
         self.__extra_losses = dict() # lossname: List[lossitem]
         self.__extra_metrics = dict() # metricsname: List[metricsitem]
+        self.__extra_outputs = dict() # tensorname: List[outputitem]
         self.__extra_hooks = dict()
         self.__extra_objects = dict()
 
@@ -53,6 +54,7 @@ class ExtraContext:
     def __exit__(self, exc_type, exc_value, traceback):
         self.__extra_losses = None
         self.__extra_metrics = None
+        self.__extra_outputs = None
         self.__extra_hooks = None
         self.__extra_objects = None
 
@@ -90,6 +92,21 @@ class ExtraContext:
             raise ValueError("Metrics have been cleared. Users should not access context manager after exiting context. This could be a bug.")
         self.__extra_metrics.setdefault(prefix, []).append(metric)
         self.__op_metrics[prefix] = op
+
+    def add_output(self, prefix: str, output: torch.Tensor):
+        """
+        Add an output tensor to the context.
+        """
+        if self.__extra_outputs is None:
+            raise ValueError("Outputs have been cleared. Users should not access context manager after exiting context. This could be a bug.")
+        self.__extra_outputs.setdefault(prefix, []).append(output)
+
+        # Check the shape must be consistent
+        if len(self.__extra_outputs[prefix]) > 1:
+            first_shape = self.__extra_outputs[prefix][0].shape
+            last_shape = self.__extra_outputs[prefix][-1].shape
+            if first_shape != last_shape:
+                raise ValueError(f"Extra Output shape mismatch for prefix {prefix}. Expected {first_shape}, but got {last_shape}.")
 
     def add_hook(self, prefix: str, hook: Callable):
         """
@@ -150,6 +167,18 @@ class ExtraContext:
             metrics[metric_name] = self._tensors_reduce(metric_terms, op=self.__op_metrics.get(metric_name, default_op))
         return metrics
     
+    def get_outputs(self):
+        """
+        Get the registered outputs in the context.
+        """
+        if self.__extra_outputs is None:
+            raise ValueError("Outputs have been cleared. Users should not access context manager after exiting context. This could be a bug.")
+        
+        outputs = {}
+        for output_name, output_terms in self.__extra_outputs.items():
+            outputs[output_name] = torch.stack(output_terms, dim=0) if len(output_terms) > 1 else output_terms[0].unsqueeze(0)
+        return outputs
+    
     @property
     def losses(self):
         if self.__extra_losses is None:
@@ -163,7 +192,7 @@ class ExtraContext:
         return self.__extra_hooks
 
 
-def register_extra_loss(module: nn.Module, loss_term: torch.Tensor, prefix: str = None, op: ExtraContext.ReduceOps = "mean"):
+def register_extra_loss(module: nn.Module, prefix: str, loss_term: torch.Tensor, op: ExtraContext.ReduceOps = "mean"):
     """
     Register an extra loss term to a module.
     """
@@ -174,7 +203,7 @@ def register_extra_loss(module: nn.Module, loss_term: torch.Tensor, prefix: str 
     module.extra_context.add_loss(prefix, loss_term, op=op)
 
 
-def register_extra_metric(module: nn.Module, metric_term: torch.Tensor, prefix: str = None, op: ExtraContext.ReduceOps = "mean"):
+def register_extra_metric(module: nn.Module, prefix: str, metric_term: torch.Tensor, op: ExtraContext.ReduceOps = "mean"):
     """
     Register an extra metric term to a module.
     """
@@ -185,7 +214,7 @@ def register_extra_metric(module: nn.Module, metric_term: torch.Tensor, prefix: 
     module.extra_context.add_metric(prefix, metric_term, op=op)
 
 
-def register_extra_hook(module: nn.Module, hook: Callable, prefix: str = None):
+def register_extra_hook(module: nn.Module, prefix: str, hook: Callable):
     """
     Register an extra hook to a module.
     """
@@ -194,6 +223,16 @@ def register_extra_hook(module: nn.Module, hook: Callable, prefix: str = None):
             warnings.warn(f"Training does not launch with an ExtraContext. This hook will be ignored.", UserWarning,stacklevel=2)
         return
     module.extra_context.add_hook(prefix, hook)
+
+def register_extra_output(module: nn.Module, prefix: str, output: torch.Tensor):
+    """
+    Register an extra output tensor to a module.
+    """
+    if not hasattr(module, "extra_context"):
+        if module.training:
+            warnings.warn(f"Training does not launch with an ExtraContext. This output will be ignored.", UserWarning, stacklevel=2)
+        return
+    module.extra_context.add_output(prefix, output)
 
 
 def get_extra_context(module: nn.Module):

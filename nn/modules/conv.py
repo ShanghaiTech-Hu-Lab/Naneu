@@ -22,14 +22,15 @@ class AverageConvnd(nn.Module):
         self.register_buffer("kernel", self._make_average_kernel(size))
         self.conv_fn = getattr(F, f"conv{ndim}d")
     def _make_average_kernel(self, size: Sequence[Union[int, SymInt]]) -> torch.Tensor:
-        kernel = torch.ones(size) / torch.as_tensor(size).numel()
+        kernel = torch.ones(size)
+        kernel = kernel / kernel.numel()  # normalize
         kernel = kernel.view(1,1,*kernel.shape)
         return kernel
     
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         in_channels = input.size(1)
-        kernel = self.kernel.expand(in_channels, 1, *self.kernel.shape).type_as(input)
-        input = self.conv_fn(input, kernel, padding = self.size // 2, groups=in_channels)
+        kernel = self.kernel.expand(in_channels, -1, *self.kernel.shape[-2:]).type_as(input)
+        input = self.conv_fn(input, kernel, padding =  [s // 2 for s in self.size], groups=in_channels)
         return input
 
 class GaussianConvnd(nn.Module):
@@ -58,8 +59,8 @@ class GaussianConvnd(nn.Module):
     
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         in_channels = input.size(1)
-        kernel = self.kernel.expand(in_channels, 1, *self.kernel.shape).type_as(input)
-        input = self.conv_fn(input, kernel, padding = self.size // 2, groups=in_channels)
+        kernel = self.kernel.expand(in_channels, -1, *self.kernel.shape[-2:]).type_as(input)
+        input = self.conv_fn(input, kernel, padding =  [s // 2 for s in self.size], groups=in_channels)
         return input
 
 class ChannelAttention2d(nn.Module):
@@ -102,7 +103,7 @@ class CABChain(nn.Module):
         self.encoder = nn.Sequential(
             *[CAB2d(n_in_feat, kernel_size, reduction, bias=bias, act=act) 
               for _ in range(n_cab)]) if n_cab > 0 else nn.Identity()
-        self.proj = conv(n_in_feat, n_out_feat, kernel_size, bias=False) if n_in_feat != n_out_feat else nn.Identity()
+        self.proj = conv(n_in_feat, n_out_feat, kernel_size, bias=bias) if n_in_feat != n_out_feat else nn.Identity()
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         res = self.encoder(input)

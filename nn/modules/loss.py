@@ -28,7 +28,7 @@ class SSIMLoss(nn.Module):
             self,
             kernel_size: int | Sequence[Union[int, SymInt]],
             *,
-            kernel: Literal["avg", "gauss"] | Callable[[torch.Tensor], torch.Tensor] = "gauss",
+            kernel: Literal["avg", "gauss"] | Callable[[torch.Tensor], torch.Tensor] = "avg",
             reduction: Literal["mean", "sum", "none"] = "mean",
             data_range: float = 1.0,
             k1: float = 0.01, k2: float = 0.03
