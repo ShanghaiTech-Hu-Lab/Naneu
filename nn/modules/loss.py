@@ -1,8 +1,9 @@
 import torch
 from torch import nn, SymInt
 from torchvision.transforms import GaussianBlur
+from torchvision.models.feature_extraction import create_feature_extractor
 from typing import Literal, Callable, Sequence, Union
-
+from torchvision.models import vgg16
 from .conv import AverageConvnd, GaussianConvnd
 
 class SSIMLoss(nn.Module):
@@ -115,3 +116,61 @@ class SSIMLoss(nn.Module):
             score =  1 - ssim_map
         
         return score.to(device)
+
+
+class VGGLoss(nn.Module):
+    def __init__(self, layers=['relu1_2', 'relu3_3', 'relu5_3']):
+        super().__init__()
+        self.layers = layers
+        self.layers_mapping = {
+            'relu1_1': 'features.1', 'relu1_2': 'features.3', 
+            'relu2_1': 'features.6', 'relu2_2': 'features.8',
+            'relu3_1': 'features.11', 'relu3_2': 'features.13', 'relu3_3': 'features.15',
+            'relu4_1': 'features.18', 'relu4_2': 'features.20', 'relu4_3': 'features.22',
+            'relu5_1': 'features.25', 'relu5_2': 'features.27', 'relu5_3': 'features.29',
+        }
+
+        if not all(layer in self.layers_mapping for layer in layers):
+            raise ValueError(f"Invalid layers specified. Available layers: {list(self.layers_mapping.keys())}")
+
+        vgg = vgg16(pretrained=True).eval()
+        self.feat_extractor = create_feature_extractor(
+            vgg,
+            return_nodes={
+                self.layers_mapping[key]: key for key in layers
+            }
+        )
+        
+        self.criterion = nn.L1Loss()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if pred.ndim != 4 or target.ndim != 4:
+            raise ValueError(f"Input and target must have 4 dims. Got {pred.ndim} and {target.ndim}.")
+        
+        if pred.size(-3) != target.size(-3):
+            raise ValueError(f"Input and target must have the same batch size. Got {pred.size(-3)} and {target.size(-3)}.")
+        
+        target_mean = target.mean()
+        target_std = target.std()
+
+        pred = (pred - target_mean) / target_std
+        target = (target - target_mean) / target_std
+
+        if target.size(-3) == 1:
+            target = target.expand(-1, 3, -1, -1)
+            pred = pred.expand(-1, 3, -1, -1)
+        elif target.size(-3) != 3:
+            raise ValueError(
+                f"Expected the target to have 1 or 3 channels (size[-3]), but got {target.size(-3)}. "
+                "Ensure the target tensor has a channel dimension of size 1 or 3."
+            )
+
+        features_pred = self.feat_extractor(pred)
+        features_target = self.feat_extractor(target)
+
+        loss = sum(
+            self.criterion(features_pred[layer], features_target[layer]) for layer in self.layers
+        )
+
+        return loss
+        
