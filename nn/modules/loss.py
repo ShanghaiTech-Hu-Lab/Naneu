@@ -133,7 +133,8 @@ class VGGLoss(nn.Module):
         if not all(layer in self.layers_mapping for layer in layers):
             raise ValueError(f"Invalid layers specified. Available layers: {list(self.layers_mapping.keys())}")
 
-        vgg = vgg16(pretrained=True).eval()
+        vgg = vgg16(pretrained=True).eval().requires_grad_(False)
+
         self.feat_extractor = create_feature_extractor(
             vgg,
             return_nodes={
@@ -168,9 +169,10 @@ class VGGLoss(nn.Module):
         features_pred = self.feat_extractor(pred)
         features_target = self.feat_extractor(target)
 
-        loss = sum(
-            self.criterion(features_pred[layer], features_target[layer]) for layer in self.layers
-        )
+        loss = torch.stack(
+            [self.criterion(features_pred[layer], features_target[layer]) for layer in self.layers],
+            dim=0
+        ).mean()
 
         return loss
         
