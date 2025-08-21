@@ -36,13 +36,19 @@ class SSIMLoss(nn.Module):
         ):
         super().__init__()
         self.kernel_size = [kernel_size] * 2 if isinstance(kernel_size, int) else kernel_size
+        if self.kernel_size[0] <= 5:
+            self.sigma = 0.7
+        elif self.kernel_size[0] == 7:
+            self.sigma = 1.0
+        else:
+            self.sigma = 1.5
         self.kernel = kernel
         self.reduction = reduction
         self.register_buffer("data_range", torch.as_tensor(data_range))
         self.k1, self.k2 = k1, k2
 
         # unbiased estimate
-        npts = torch.as_tensor(self.kernel_size).numel()
+        npts = torch.prod(torch.as_tensor(self.kernel_size)).item()
         self.cov_norm = npts / (npts - 1)
 
         ndim = len(self.kernel_size)
@@ -50,9 +56,9 @@ class SSIMLoss(nn.Module):
             self.conv = AverageConvnd(self.kernel_size)
         elif self.kernel == "gauss":
             if ndim == 2:
-                self.conv = GaussianBlur(self.kernel_size, sigma = 1.5)
+                self.conv = GaussianBlur(self.kernel_size, sigma = self.sigma)
             else:
-                self.conv = GaussianConvnd(self.kernel_size, sigma = 1.5)
+                self.conv = GaussianConvnd(self.kernel_size, sigma = self.sigma)
         elif callable(self.kernel):
             self.conv = self.kernel
         else:
